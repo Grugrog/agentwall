@@ -68,6 +68,21 @@ for p,s,m in [("/portal",403,"GET"),("/portal/",403,"GET"),("/portal%2e",403,"GE
         has_referer=False,truth="attacker")); t+=0.3
 results.append(run_case("real attacker inside busy /24 still caught", ev, expect_fire=True))
 
+# Cases 4-6: everyday benign flows that kill_chain once mistook for a
+# deny -> breakthrough "jump". None involves an evasion variant.
+H="Mozilla/5.0 (Windows NT 10.0) Chrome/141.0"
+def _h(t,sid,ip,m,p,s): return Event(ts=t,session_id=sid,src_ip=ip,user_agent=H,
+    method=m,path=p,status=s,has_referer=True,truth="human")
+results.append(run_case("403 -> login -> 200 on a portal sub-page", [
+    _h(0,"l1",f"{NET}60","GET","/portal",403), _h(5,"l1",f"{NET}60","POST","/login",200),
+    _h(8,"l1",f"{NET}60","GET","/portal/home",200)], expect_fire=False))
+results.append(run_case("denied on a child, clicks back to the parent", [
+    _h(0,"l2",f"{NET}61","GET","/portal/admin",403),
+    _h(4,"l2",f"{NET}61","GET","/portal",200)], expect_fire=False))
+results.append(run_case("NAT: one user 403s, a colleague uses the portal", [
+    _h(0,"l3",f"{NET}62","GET","/portal",403),
+    _h(60,"l4",f"{NET}63","GET","/portal/matters",200)], expect_fire=False))
+
 print(f"\n{sum(results)}/{len(results)} passed")
 
 # ---------------------------------------------------------------------------

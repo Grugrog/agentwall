@@ -23,20 +23,13 @@ activity you must run it on infrastructure you own, on a plausible hostname.
      proxy_set_header Host $host;
    }
    ```
-   Then run the honeypot with a small patch to read `X-Forwarded-For` as
-   `src_ip` (the handler already reads headers; wire it in for production).
+   Then run the honeypot with `--trust-proxy` so it reads the real client IP
+   from `X-Forwarded-For` (first hop) / `X-Real-IP`. Only use that flag when
+   your own proxy fronts it; otherwise clients could spoof their source IP.
 
-2. systemd unit:
-   ```
-   [Unit]
-   Description=AgentWall honeypot
-   After=network.target
-   [Service]
-   ExecStart=/usr/bin/python3 /opt/agentwall/honeypot.py --host 127.0.0.1 --port 8899 --log /var/log/agentwall/hp.jsonl
-   Restart=always
-   [Install]
-   WantedBy=multi-user.target
-   ```
+2. systemd: use the shipped `agentwall-honeypot.service` (loopback bind,
+   `--trust-proxy`, non-root user, filesystem hardening). Install steps are in
+   the comment at the top of that file.
 
 3. Make it findable (that's the point): a real subdomain
    (`portal.<yourdomain>`), linked from nowhere sensitive, listed in
@@ -45,8 +38,17 @@ activity you must run it on infrastructure you own, on a plausible hostname.
 
 4. Analyse on a schedule:
    ```
-   */10 * * * * python3 /opt/agentwall/analyze.py /var/log/agentwall/hp.jsonl >> /var/log/agentwall/report.txt
+   */10 * * * * python3 /opt/agentwall/analyze.py /var/log/agentwall/honeypot.jsonl >> /var/log/agentwall/report.txt
    ```
+
+## Docker
+```
+mkdir -p data && sudo chown 10001:10001 data   # the container runs as uid 10001
+docker compose up -d
+```
+The compose file bind-mounts `./data`. If Docker creates that directory itself
+it is root-owned, and the honeypot exits at startup with a permission error
+(it opens the log before serving, so this can't fail silently).
 
 ## Behind Cloudflare (recommended)
 - Proxy the subdomain through Cloudflare. Enable **Logpush** (free on all

@@ -87,7 +87,7 @@ class Detection:
     session_id: str
     src_ip: str
     reason: str                    # human-readable why
-    severity: str = "high"         # low | medium | high
+    severity: str = "high"         # low | medium | high | critical
     # the event indices (into the stream) that make up the evidence
     evidence_idx: list = field(default_factory=list)
     # optional enrichment fields set by specific detectors

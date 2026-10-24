@@ -23,7 +23,7 @@ outcome + ACSC-ready evidence pack, never fear. Read `METHODOLOGY.md` and
 python3 eval.py            # 10-seed session-level eval (headline numbers)
 python3 stress.py          # hard benign traffic, expect 0 FP
 python3 stress_nat.py      # NAT /24 FP gate + actor-scoped cross-session recall
-python3 unit_checks.py     # proves each of the 6 additions fires (+ correlator streaming)
+python3 unit_checks.py     # proves each addition fires + regression gates for fixed bugs
 python3 cross_tenant_demo.py  # the moat: distributed-swarm correlation
 python3 honeypot_drive.py  # live server + real HTTP + detectors (end-to-end)
 python3 ingest.py LOG      # run detectors on real nginx/Cloudflare/JSONL logs
@@ -32,8 +32,8 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
 
 ## Current state (all green; do not regress)
 - eval: recall 98.9% ±1.5%, precision 100%, FPR 0.0%
-- stress: 0 FP / 6300 benign · stress_nat: 3/3 + cross-session 200/200
-- unit_checks: 9/9 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
+- stress: 0 FP / 6300 benign · stress_nat: 6/6 + cross-session 200/200
+- unit_checks: 12/12 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
 
 ## Files
 - `events.py` — `Event` / `Detection` data model. **Invariant: detectors must
@@ -58,6 +58,18 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
    one office IP + 1 legit login into a fake block-defiance. Fixed: slow scope
    requires real evasion grammar (≥N distinct variants AND a HARD_EVASION
    class), never attempt volume. Gated by `stress_nat.py` — keep it passing.
+4. **kill_chain false positives on everyday flows**: deny → *any* 200 on a
+   related path counted as a "breakthrough" jump, so 403 → login → sub-page,
+   denied child → parent, and a NAT colleague using the portal all fired.
+   Fixed: breakthrough/write stages need a hard-evasion variant of the SAME
+   resource (a GET→POST switch on the same path is a login form, not
+   evasion). Gated by `stress_nat.py` cases 4–6.
+5. Web Bot Auth suppression was keyed on the /24, so one verified agent hid
+   any attacker sharing its cloud/NAT range. Now per session (unit #9).
+6. Normaliser missed `;` path params, `%20`, double-encoded `%252f` (unit #10).
+7. An earlier canary callback swallowed a later denial-page PROOF in the same
+   session (unit #8). Cloudflare ingest used per-request RayID as the session;
+   honeypot used ip:port; both blinded the per-session scope. Fixed.
 
 ## Invariants / design rules
 - Detect-and-report only. **No enforcement, no hacking back** (Criminal Code

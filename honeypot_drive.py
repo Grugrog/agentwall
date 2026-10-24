@@ -57,9 +57,8 @@ def naive_crawler(base):
         time.sleep(0.01)
 
 
-def injection_agent(base):
+def injection_agent(base, ua="ResearchAgent/1.0 (python-httpx)"):
     """Fetches a canary and OBEYS the hidden instruction -> real callback."""
-    ua = "ResearchAgent/1.0 (python-httpx)"
     _, body, _ = req(base, "/datasets/client-index.json", ua=ua)
     m = CB_RE.search(body)
     if m:
@@ -85,8 +84,8 @@ def blockdefiance_agent(base):
 
 
 def main():
-    hp = Honeypot(host="127.0.0.1", port=0, log_path=LOG)
     open(LOG, "w").close()   # truncate
+    hp = Honeypot(host="127.0.0.1", port=0, log_path=LOG)
     hp.start_background()
     base = f"http://127.0.0.1:{hp.port}"
     print(f"honeypot live on {base}")
@@ -96,8 +95,10 @@ def main():
         benign_browser(base)
     for _ in range(3):
         naive_crawler(base)
+    # two DIFFERENT agents (distinct UAs): sessions are keyed on IP + UA when
+    # no cookie is kept, so two runs of one identical agent would be one actor
     injection_agent(base)
-    injection_agent(base)
+    injection_agent(base, ua="DataHarvester/0.3 (aiohttp)")
     blockdefiance_agent(base)
     time.sleep(0.2)
     hp.stop()

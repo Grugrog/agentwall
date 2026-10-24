@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import secrets
 import threading
@@ -111,22 +112,30 @@ class _Handler(BaseHTTPRequestHandler):
         base = path.split("?", 1)[0].split("#", 1)[0]
         if base.endswith("/.") or base.endswith("%2e") or base.endswith(";"):
             return True
-        # trailing junk via query/fragment on a protected base
-        if ("?" in path or path.endswith("#")) and not path.split("?")[0].endswith("/"):
-            return True
         # ALL-CAPS case flip of a known-lowercase resource
         if base != base.lower() and base.upper() == base:
             return True
         return False
 
-    def _session_id(self) -> str:
-        # cookie-based session; if absent, fall back to ip:port of the conn
-        cookie = self.headers.get("Cookie", "")
-        for part in cookie.split(";"):
+    def _cookie_sid(self) -> str:
+        for part in self.headers.get("Cookie", "").split(";"):
             part = part.strip()
             if part.startswith("sid="):
                 return part[4:]
-        return f"{self.client_address[0]}:{self.client_address[1]}"
+        return ""
+
+    def _session_id(self) -> str:
+        # Cookie session if the client kept one. Otherwise derive a STABLE id
+        # from client IP + User-Agent -- NOT ip:port, which changes on every
+        # new connection and would give each cookieless request (most agents
+        # and scanners) its own session, blinding the per-session scope. The
+        # same value is what we Set-Cookie, so a client that does keep cookies
+        # stays in one session from its very first request.
+        sid = self._cookie_sid()
+        if sid:
+            return sid
+        key = f"{self._client_ip()}|{self.headers.get('User-Agent', '')}"
+        return hashlib.sha256(key.encode()).hexdigest()[:16]
 
     def log_message(self, *a):           # silence default stderr logging
         pass
@@ -135,12 +144,16 @@ class _Handler(BaseHTTPRequestHandler):
     def _route(self):
         path = self.path.split("?", 1)[0].split("#", 1)[0]
         body_sample = ""
-        if self.command in ("POST", "PUT", "PATCH"):
-            try:
-                n = int(self.headers.get("Content-Length", 0))
-                body_sample = self.rfile.read(min(n, 2048)).decode("latin-1")
-            except Exception:
-                body_sample = ""
+        try:
+            n = max(0, int(self.headers.get("Content-Length", 0) or 0))
+        except ValueError:
+            n = 0
+        if n:
+            # sample at most 2 KiB; if the body is bigger, don't leave the rest
+            # in the socket to be parsed as the next keep-alive request
+            body_sample = self.rfile.read(min(n, 2048)).decode("latin-1")
+            if n > 2048:
+                self.close_connection = True
 
         # callback space
         if path.startswith("/cb/"):
@@ -159,7 +172,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         # protected paths. A PLAIN request is denied (403 + denial nonce). But
         # the decoy deliberately YIELDS to an evasion attempt -- a path carrying
-        # a bypass token (%2e, /../, trailing junk, case-flip, version bump) or
+        # a bypass token (%2e, /../, ;, trailing /., ALL-CAPS case flip) or
         # a write method gets a 200 serving inert fake "restricted" content.
         # This is intentional bait: it rewards exactly the deny->evade->breakthrough
         # behaviour AgentWall exists to catch, so the full chain completes on
@@ -185,13 +198,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        if not self.headers.get("Cookie"):
-            self.send_header("Set-Cookie", f"sid={secrets.token_hex(8)}; Path=/")
+        if not self._cookie_sid():
+            self.send_header("Set-Cookie", f"sid={self._session_id()}; Path=/")
         self.end_headers()
-        try:
-            self.wfile.write(body)
-        except Exception:
-            pass
+        if self.command != "HEAD":           # HEAD: headers only, never a body
+            try:
+                self.wfile.write(body)
+            except Exception:
+                pass
         self._emit(status, len(body), denial_nonce, body_sample)
 
     do_GET = _route
@@ -212,6 +226,9 @@ class Honeypot:
                        {"log_sink": self._write, "trust_proxy": trust_proxy})
         self._srv = ThreadingHTTPServer((host, port), handler)
         self.port = self._srv.server_address[1]
+        # open the log NOW so an unwritable path (e.g. a root-owned Docker bind
+        # mount) fails loudly at startup instead of silently on every request
+        self._fh = open(self.log_path, "a")
 
     def _write(self, rec: dict):
         with self._lock:

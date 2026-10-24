@@ -1,8 +1,10 @@
 """
 Detectors for the AgentWall PoC.
 
-Two production-shaped detectors, both streaming (process one Event at a time,
-keep bounded per-session state). Neither reads Event.truth.
+Four detectors, all streaming (process one Event at a time, keep per-session
+or per-actor state). None reads Event.truth. block_defiance and
+injection_tripwire are described here; egress_deaddrop and kill_chain carry
+their own docstrings below.
 
   BlockDefianceDetector
       The core signal from both the Hugging Face and Medicare postmortems:
@@ -34,6 +36,7 @@ report.
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote
 from collections import defaultdict, deque
 from typing import Dict, Iterable, List, Optional
 
@@ -67,9 +70,12 @@ def _classify_mutation(orig_path: str, orig_method: str,
     mo, mp = _VER_RE.search(op), _VER_RE.search(p)
     if mo and mp and mo.group(1) != mp.group(1):
         return "version"
-    if "%2e" in path.lower() or "%2f" in path.lower() or "%25" in path.lower():
+    low = path.lower()
+    if ("%2e" in low or "%2f" in low or "%25" in low or
+            ("%" in path and "%" not in orig_path)):
         return "encoding"
-    if "/./" in path or "/../" in path or path.startswith("/.."):
+    if ("/./" in path or "/../" in path or path.startswith("/..") or
+            "..;" in path):
         return "dotseg"
     if p.rstrip("/") == op.rstrip("/") and p != op:
         return "trailing"                     # trailing slash only
@@ -148,17 +154,17 @@ def _resource_key(path: str) -> str:
     'genuinely different page'.
     """
     p = path.split("?", 1)[0].split("#", 1)[0]
-    p = p.lower()
-    # decode the common evasion encodings BEFORE splitting
-    p = p.replace("%2e", ".").replace("%2f", "/").replace("%252e", ".")
-    p = p.replace("/./", "/")
+    # decode percent-encoding (twice, for double-encoding like %252e) BEFORE
+    # splitting, so %2e / %2f / %20 / %252f variants land on the same key
+    p = unquote(unquote(p)).lower()
     # drop ALL dot / traversal / empty segments anywhere in the path, and
     # trailing-dot tricks like 'matters.' -> 'matters'. This is the whole
     # job of the normaliser: make every evasion variant of a resource map to
     # the same key, so the deny and the breakthrough land in one bucket.
     segs = []
     for s in p.split("/"):
-        s = s.rstrip(".")           # 'matters.' -> 'matters'
+        s = s.split(";", 1)[0]      # path params: 'portal;x', 'portal..;' -> 'portal'
+        s = s.lstrip().rstrip(". \t")  # 'matters.' / 'matters ' -> 'matters'
         if s in ("", ".", ".."):
             continue
         # fold an API version segment so /api/v1/x and /api/v2/x share a key:
@@ -195,9 +201,11 @@ class BlockDefianceDetector:
         # scope name -> { key -> state }
         self._state: Dict[str, Dict[tuple, dict]] = {"fast": {}, "slow": {}}
         self._fired: set = set()  # (actor_cluster, resource) already alerted
-        # per-actor identity profile for the Web Bot Auth signal
-        self._wba_verified: set = set()   # actors that presented valid WBA
-        self._claims_agent: set = set()   # actors whose UA claims an agent
+        # per-SESSION identity profile for the Web Bot Auth signal. Keyed on
+        # the session, not the /24: one verified agent sharing a cloud or NAT
+        # /24 with an attacker must not suppress (or upgrade) the attacker.
+        self._wba_verified: set = set()   # sessions that presented valid WBA
+        self._claims_agent: set = set()   # sessions whose UA claims an agent
 
     # user-agent substrings that CLAIM to be an automated agent
     _AGENT_UA_RE = re.compile(
@@ -304,9 +312,9 @@ class BlockDefianceDetector:
 
         # update the actor's identity profile (Web Bot Auth signal)
         if e.web_bot_auth:
-            self._wba_verified.add(actor)
+            self._wba_verified.add(e.session_id)
         if e.user_agent and self._AGENT_UA_RE.search(e.user_agent):
-            self._claims_agent.add(actor)
+            self._claims_agent.add(e.session_id)
 
         if e.denied:
             # arm BOTH scopes: session-local and actor-cluster
@@ -326,7 +334,8 @@ class BlockDefianceDetector:
             # Web Bot Auth: a cryptographically-verified agent acting for a
             # real user is legitimate -- suppress. (Verified upstream; if the
             # flag is set we trust it.)
-            if actor in self._wba_verified:
+            verified = e.session_id in self._wba_verified
+            if verified:
                 self._fired.add(dedupe)   # mark so we don't re-evaluate
                 return None
             self._fired.add(dedupe)
@@ -350,7 +359,7 @@ class BlockDefianceDetector:
             # signature -> spoofed/unverified automation. Highest concern.
             severity = "high"
             wba_note = ""
-            if actor in self._claims_agent and actor not in self._wba_verified:
+            if e.session_id in self._claims_agent:
                 severity = "critical"
                 wba_note = " [unverified agent: no Web Bot Auth signature]"
             return Detection(
@@ -390,12 +399,15 @@ class InjectionTripwireDetector:
                                                    _resource_key(e.path))
 
         # (a) callback hit -- an agent obeyed an embedded instruction
-        if e.path.startswith(self._CB_PREFIX):
-            if e.session_id in self._fired:
-                return None
-            self._fired.add(e.session_id)
+        if e.direction == "inbound" and e.path.startswith(self._CB_PREFIX):
             nonce = e.path[len(self._CB_PREFIX):].split("/", 1)[0].split("?", 1)[0]
             match = self._denial_nonces.get(nonce)
+            # dedupe proof-grade and canary hits separately, so an earlier
+            # canary callback can't swallow a later denial-page PROOF
+            key = (e.session_id, "proof" if match else "cb")
+            if key in self._fired:
+                return None
+            self._fired.add(key)
             if match:
                 # PROOF-grade: this nonce only ever appeared in a 403 body we
                 # served to this attacker. Obeying it = read the denial +
@@ -513,15 +525,20 @@ class KillChainDetector:
         self.window_s = window_s
         self._st: Dict[str, dict] = {}   # actor -> {stages:set, last_stage, ...}
         self._fired: set = set()
-        # per-actor: resources we've seen denied, to recognise a later 2xx as a
-        # breakthrough stage rather than normal traffic.
-        self._denied_res: Dict[str, set] = defaultdict(set)
-        # exact denied paths per actor, and actors that have shown an evasion
-        # VARIANT (different path to a denied resource). Breakthrough/write
-        # stages only count once evasion is seen -- so a legit 401->refresh->
-        # 200 on the SAME path is not mistaken for block defiance.
-        self._denied_paths: Dict[str, set] = defaultdict(set)
+        # per-actor: denied resource key -> first denied (path, method). Used
+        # to recognise a later request as an EVASION of that resource.
+        self._denied: Dict[str, Dict[str, tuple]] = defaultdict(dict)
+        # (actor, resource) pairs where a hard-evasion variant has been seen.
+        # Breakthrough/write/evade stages only count after that -- so a legit
+        # 401 -> refresh -> 200 on the same path, a 403 -> login -> 200 on a
+        # sub-page, or a NAT colleague using the portal is NOT block defiance.
         self._evaded: set = set()
+
+    def _is_evasion(self, actor: str, rk: str, e: Event) -> bool:
+        orig = self._denied[actor].get(rk)
+        if not orig or e.path == orig[0]:
+            return False
+        return _classify_mutation(orig[0], orig[1], e.path, e.method) in HARD_EVASION
 
     def _stage_for(self, e: Event, actor: str) -> Optional[int]:
         rk = _resource_key(e.path)
@@ -535,32 +552,26 @@ class KillChainDetector:
         if e.notfound:
             return 1
         if e.denied:
-            self._denied_res[actor].add(rk)
-            self._denied_paths[actor].add(e.path)
+            self._denied[actor].setdefault(rk, (e.path, e.method))
+            if self._is_evasion(actor, rk, e):
+                self._evaded.add((actor, rk))
             return 2
-        # a request to a resource previously denied for this actor:
-        prev_denied = any(rk == d or rk.startswith(d + "/") or d.startswith(rk + "/")
-                          for d in self._denied_res[actor])
-        if prev_denied:
-            is_write = e.method in ("PUT", "POST", "DELETE", "PATCH")
-            # A plain retry of the SAME path after a deny is NOT evasion -- it's
-            # usually a legit re-request after an auth/token step (SPA refresh).
-            # Only count breakthrough/write/evade once the actor has shown an
-            # EVASION variant: a DIFFERENT path/encoding against the denied
-            # resource. We track that per actor as 'evaded'.
-            orig = self._denied_paths[actor]
-            is_variant = e.path not in orig  # a path we didn't see denied
-            if is_variant:
-                self._evaded.add(actor)
-            if actor not in self._evaded:
-                # no evasion seen yet: a same-path 200/ write is normal auth flow
-                self._denied_paths[actor].add(e.path)
-                return None
+        is_write = e.method in ("PUT", "POST", "DELETE", "PATCH")
+        if rk in self._denied[actor]:
+            if self._is_evasion(actor, rk, e):
+                self._evaded.add((actor, rk))
+            if (actor, rk) not in self._evaded:
+                return None  # plain retry / normal auth flow, not evasion
             if is_write:
                 return 5
             if e.ok:
                 return 4
-            return 3  # another non-success attempt = evade
+            return 3  # another non-success attempt after evasion = evade
+        # write-back to a CHILD of an evaded resource (PUT /portal/x after
+        # breaking into /portal) -- the write both incidents performed
+        if is_write and any((actor, d) in self._evaded and rk.startswith(d + "/")
+                            for d in self._denied[actor]):
+            return 5
         return None  # normal traffic to a never-denied resource
 
     def feed(self, idx: int, e: Event) -> Optional[Detection]:

@@ -21,7 +21,7 @@ REAL logs, and `honeypot.py` is a live server that produces them.
 - `stress.py` — hard benign traffic. `python3 stress.py`
 - `stress_nat.py` — **NAT /24 false-positive gate** + actor-scoped
   cross-session recall. `python3 stress_nat.py`
-- `unit_checks.py` — proves each of the 6 additions fires. `python3 unit_checks.py`
+- `unit_checks.py` — proves each addition fires + regression gates. `python3 unit_checks.py`
 - `ingest.py` — parse real nginx / Cloudflare / JSONL logs. `python3 ingest.py LOG`
 - `honeypot.py` — live decoy HTTP server (X-Forwarded-For aware), logs Events.
 - `honeypot_drive.py` — end-to-end: live server + real traffic + detectors.
@@ -40,7 +40,8 @@ REAL logs, and `honeypot.py` is a live server that produces them.
      but requires genuine evasion (≥N distinct variants **and** a hard-evasion
      grammar class), so NAT aggregation can't false-fire. Enriched with
      timing (`script`/`agent`), evasion-grammar signature, and Web Bot Auth
-     (verified → suppress; unverified agent UA → critical).
+     (verified session → suppress; unverified agent UA → critical). Both are
+     per session, so a verified neighbour in the /24 can't hide an attacker.
 2. **injection_tripwire** — canary `/cb/` callback, denial-page nonce callback
    (**proof-grade**), or LLM artifact in a request body/header.
 3. **egress_deaddrop** — server/agent writes OUT to a non-allowlisted host.
@@ -72,6 +73,13 @@ kill_chain), 0 false positives on the benign clients.
   behind one office IP + 1 legit login into a fake block-defiance alert. Fixed:
   slow scope now requires real evasion grammar, not attempt volume. Regression-
   gated in `stress_nat.py`.
+- **kill_chain false positives** (review round): deny → any related 200 was
+  read as a breakthrough, so 403 → login → sub-page and a NAT colleague using
+  the portal fired. Fixed: breakthrough needs a hard-evasion variant of the
+  same resource. Gated in `stress_nat.py` (now 6 cases). Also fixed: Web Bot
+  Auth suppression scoped to the /24, normaliser gaps (`;`, `%20`, `%252f`),
+  proof callbacks swallowed by canary dedupe, per-request session ids in
+  Cloudflare ingest and the honeypot.
 
 ## Known limits (honest)
 - Spacing beyond the slow-scope TTL is still missed; the TTL trades coverage

@@ -110,7 +110,13 @@ trigger, so a brand-new exfil host still fires. The allowlist is per-customer
 Correlates one actor across the stages both incidents walked through: recon →
 deny → evade → breakthrough → write → egress, with a canary callback as a
 "confirmed agent" upgrade. Fires on ≥3 distinct stages, or on a jump of ≥2
-stages (e.g. deny straight to breakthrough). It adds no new primitive signal;
+stages (e.g. deny straight to breakthrough). The evade/breakthrough/write
+stages only count once the actor has sent a hard-evasion variant (encoding,
+dot-segment, case, version) of the *same* denied resource: an earlier version
+treated any related 200 as a breakthrough and fired on 403 → login →
+sub-page and on NAT colleagues (now gated in `stress_nat.py`). A GET→POST
+switch on the identical path is deliberately not evasion — that is a login
+form. It adds no new primitive signal;
 its value is turning several individually explainable events into one
 campaign-level alert an analyst can act on.
 
@@ -220,7 +226,7 @@ The methodology and results are also publishable as a research note.
 After the three base detectors, six additions were integrated and each
 verified to fire (`unit_checks.py`): cross-session actor-scope state, a
 kill-chain correlator, timing classification (`script`/`agent`), evasion-
-grammar signatures, Web Bot Auth suppression/upgrade, and a denial-page nonce
+grammar signatures, Web Bot Auth suppression/upgrade (per session), and a denial-page nonce
 tripwire (proof-grade).
 
 Testing the additions surfaced a production-critical false positive. The

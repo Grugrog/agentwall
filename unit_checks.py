@@ -1,4 +1,5 @@
-"""Prove each of the six additions actually fires (not dead code)."""
+"""Prove each of the six additions actually fires (not dead code), plus
+regression gates (#7-#10) for bugs found in review."""
 from events import Event
 from detectors import run_detectors, BlockDefianceDetector
 
@@ -61,8 +62,10 @@ check("denial-nonce callback -> proof", inj and getattr(inj[0],'confidence','')=
       f"got conf='{getattr(inj[0],'confidence','') if inj else None}'")
 
 print("#2 kill-chain multi-stage:")
-rows=[('GET','/nope',404),('GET','/portal',403),('GET','/portal/',403),
-      ('POST','/portal',200),('PUT','/portal/x',201)]
+# a GET->POST switch on the SAME path is a login form, not evasion, so the
+# chain needs a real hard-evasion variant (%2e) before the breakthrough
+rows=[('GET','/nope',404),('GET','/portal',403),('GET','/portal%2e',403),
+      ('GET','/PORTAL',200),('PUT','/portal/x',201)]
 d=run_detectors(mk('k1','5.5.9.1',rows))
 kc=[x for x in d if x.detector=='kill_chain']
 check("kill_chain fires on multi-stage", bool(kc),
@@ -91,6 +94,25 @@ sig=lambda t,ts: TenantSignal(tenant_id=t,ts=ts,digest=dg,signature="encoding,do
 c.ingest(sig('A',0)); al=c.ingest(sig('B',1))
 check("single signal -> both tier alerts", sorted(a.scope for a in al)==['grammar','grammar+shape'],
       f"got {[a.scope for a in al]}")
+
+print("#8 denial-page PROOF not swallowed by an earlier canary hit (same session):")
+d=run_detectors(mk('p1','5.5.11.1',[('GET','/cb/aaa',200),
+    ('GET','/portal',403,{'denial_nonce':'nnn'}),('GET','/cb/nnn',200)]))
+check("canary then proof -> both fire", sum(1 for x in d if x.detector=='injection_tripwire')==2
+      and any(x.confidence=='proof' for x in d), f"got {[x.reason[:40] for x in d]}")
+
+print("#9 Web Bot Auth is per session: a verified neighbour in the /24 can't hide an attacker:")
+ev=mk('bot','20.1.1.5',[('GET','/',200,{'web_bot_auth':True})])
+ev+=[Event(ts=1010+i,session_id='atk',src_ip='20.1.1.99',user_agent='python-requests/2.32',
+           method=m,path=p,status=s,truth='attacker') for i,(m,p,s) in enumerate(
+     [('GET','/portal',403),('GET','/portal/',403),('GET','/portal%2e',403),('GET','/PORTAL',200)])]
+check("attacker next to verified agent still caught",
+      any(x.detector=='block_defiance' for x in run_detectors(ev)))
+
+print("#10 normaliser collapses ; / %20 / double-encoding variants:")
+from detectors import _resource_key
+ks={_resource_key(p) for p in ['/portal','/portal;','/portal..;/','/;/portal','/portal%20','/portal%252f']}
+check("all variants -> one key", ks=={'portal'}, f"got {ks}")
 
 print(f"\n{len(PASS)} pass, {len(FAIL)} fail")
 if FAIL: print("FAILED:", FAIL)

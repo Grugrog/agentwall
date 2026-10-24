@@ -31,7 +31,8 @@ from typing import Iterator, Optional
 
 from events import Event
 from detectors import (run_detectors, BlockDefianceDetector,
-                       InjectionTripwireDetector, EgressDeadDropDetector)
+                       InjectionTripwireDetector, EgressDeadDropDetector,
+                       KillChainDetector)
 
 # nginx combined:
 # 1.2.3.4 - - [24/Oct/2026:11:34:56 +1000] "GET /path HTTP/1.1" 200 1234 "ref" "UA"
@@ -89,7 +90,10 @@ def parse_cloudflare(line: str, body_field: Optional[str] = None) -> Optional[Ev
         body = str(o[body_field])[:512]
     return Event(
         ts=float(ts),
-        session_id=o.get("RayID") or o.get("ClientIP", "?"),
+        # RayID is unique PER REQUEST, so it can't be a session: using it
+        # would put every request in its own session and blind the per-session
+        # (fast) scope. Fall back to the client IP, as for nginx logs.
+        session_id=o.get("ClientIP", "?"),
         src_ip=o.get("ClientIP", "?"),
         user_agent=o.get("ClientRequestUserAgent", ""),
         method=o.get("ClientRequestMethod", "GET"),
@@ -160,7 +164,8 @@ def main(argv=None):
 
     allow = set((args.allowlist or "").split(",")) - {""}
     detectors = [BlockDefianceDetector(), InjectionTripwireDetector(),
-                 EgressDeadDropDetector(allowlist=allow)]
+                 EgressDeadDropDetector(allowlist=allow),
+                 KillChainDetector(allowlist=allow)]
     dets = run_detectors(events, detectors)
 
     if args.json:
