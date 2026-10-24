@@ -23,7 +23,7 @@ outcome + ACSC-ready evidence pack, never fear. Read `METHODOLOGY.md` and
 python3 eval.py            # 10-seed session-level eval (headline numbers)
 python3 stress.py          # hard benign traffic, expect 0 FP
 python3 stress_nat.py      # NAT /24 FP gate + actor-scoped cross-session recall
-python3 unit_checks.py     # proves each of the 6 additions fires
+python3 unit_checks.py     # proves each of the 6 additions fires (+ correlator streaming)
 python3 cross_tenant_demo.py  # the moat: distributed-swarm correlation
 python3 honeypot_drive.py  # live server + real HTTP + detectors (end-to-end)
 python3 ingest.py LOG      # run detectors on real nginx/Cloudflare/JSONL logs
@@ -33,7 +33,7 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
 ## Current state (all green; do not regress)
 - eval: recall 98.9% ±1.5%, precision 100%, FPR 0.0%
 - stress: 0 FP / 6300 benign · stress_nat: 3/3 + cross-session 200/200
-- unit_checks: 8/8 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
+- unit_checks: 9/9 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
 
 ## Files
 - `events.py` — `Event` / `Detection` data model. **Invariant: detectors must

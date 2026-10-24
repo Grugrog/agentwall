@@ -81,5 +81,16 @@ bd=[x for x in d if x.detector=='block_defiance']
 check("cross-session grind caught by slow scope", bool(bd),
       bd[0].reason if bd else "MISSED")
 
+print("#7 correlator streaming ingest surfaces BOTH tiers:")
+# one signal completing grammar+shape and grammar-only at once must yield 2 alerts
+from correlation import CrossTenantCorrelator, TenantSignal, _digest
+c=CrossTenantCorrelator(min_tenants=2, min_tenants_grammar=2)
+dg=_digest("encoding,dotseg","auth|d1")
+sig=lambda t,ts: TenantSignal(tenant_id=t,ts=ts,digest=dg,signature="encoding,dotseg",
+    shape="auth|d1",actor_hash=t,hard=True,reached_breakthrough=False)
+c.ingest(sig('A',0)); al=c.ingest(sig('B',1))
+check("single signal -> both tier alerts", sorted(a.scope for a in al)==['grammar','grammar+shape'],
+      f"got {[a.scope for a in al]}")
+
 print(f"\n{len(PASS)} pass, {len(FAIL)} fail")
 if FAIL: print("FAILED:", FAIL)

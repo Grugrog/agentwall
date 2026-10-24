@@ -221,30 +221,27 @@ class CrossTenantCorrelator:
                 last_ts=max(s.ts for s in bucket), scope=scope)
         return None
 
-    def ingest(self, sig: TenantSignal) -> Optional[SwarmAlert]:
+    def ingest(self, sig: TenantSignal) -> List[SwarmAlert]:
+        """Streaming entry point. One signal can complete both tiers at once,
+        so this returns every alert it raised (0, 1 or 2) -- returning only the
+        first would silently lose the other, since it is already marked fired."""
         if self.require_hard and not sig.hard:
-            return None
-        # precise tier first (grammar+shape); fall back to broad (grammar-only)
+            return []
+        alerts = []
+        # precise tier first (grammar+shape), then broad (grammar-only)
         a = self._check(self._buckets_shape[sig.digest], sig, sig.digest,
                         self.min_tenants, "grammar+shape")
+        if a:
+            alerts.append(a)
         gkey = _digest_grammar(sig.signature)
         b = self._check(self._buckets_grammar[gkey], sig, gkey,
                         self.min_tenants_grammar, "grammar")
-        return a or b
+        if b:
+            alerts.append(b)
+        return alerts
 
     def ingest_many(self, sigs: Iterable[TenantSignal]) -> List[SwarmAlert]:
         alerts = []
         for s in sorted(sigs, key=lambda x: x.ts):
-            # a single signal can complete both tiers; surface both
-            if self.require_hard and not s.hard:
-                continue
-            a = self._check(self._buckets_shape[s.digest], s, s.digest,
-                            self.min_tenants, "grammar+shape")
-            if a:
-                alerts.append(a)
-            gkey = _digest_grammar(s.signature)
-            b = self._check(self._buckets_grammar[gkey], s, gkey,
-                            self.min_tenants_grammar, "grammar")
-            if b:
-                alerts.append(b)
+            alerts.extend(self.ingest(s))
         return alerts

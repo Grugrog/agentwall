@@ -58,8 +58,9 @@ simulator and are never read by a detector.
 
 ## 4. Detectors
 
-All three are streaming: they process one event at a time and hold bounded
-per-session state. None reads the truth label.
+All four are streaming: they process one event at a time and hold bounded
+per-session (and, for the slow scope, per-actor `/24`) state. None reads the
+truth label.
 
 ### 4.1 block_defiance — the Medicare pattern
 Fires when, within one session and a sliding time window:
@@ -105,6 +106,14 @@ gist/github, requestbin, ngrok, …) raises severity but is never the sole
 trigger, so a brand-new exfil host still fires. The allowlist is per-customer
 (configured or learned from normal traffic).
 
+### 4.4 kill_chain — stitching the stages together
+Correlates one actor across the stages both incidents walked through: recon →
+deny → evade → breakthrough → write → egress, with a canary callback as a
+"confirmed agent" upgrade. Fires on ≥3 distinct stages, or on a jump of ≥2
+stages (e.g. deny straight to breakthrough). It adds no new primitive signal;
+its value is turning several individually explainable events into one
+campaign-level alert an analyst can act on.
+
 ## 5. Evaluation
 
 ### 5.1 Method
@@ -121,13 +130,20 @@ and time-to-detect.
 
 | metric | value |
 |---|---|
-| recall (attack sessions caught) | 98.2% ± 2.0% |
+| recall (attack sessions caught) | 98.9% ± 1.5% (791 / 800) |
 | precision | 100% |
 | false-positive rate | 0.0% (0 / 5,400) |
-| block-defiance recall | 97.5% |
-| injection recall | 100% |
-| low-and-slow recall | 96.0% |
-| mean time-to-detect | 4.4s |
+| block-defiance recall | 96.5% (250 / 259) |
+| injection recall | 100% (480 / 480) |
+| low-and-slow recall | 100% (61 / 61) |
+| cross-session recall (actor-scoped) | 100% (200 / 200 campaigns, `stress_nat.py`) |
+| mean time-to-detect | 3.3s (worst seed max 52s) |
+
+*Per-vector split note:* the eval labels a non-injection attack session as
+block-defiance or low-and-slow by its median inter-request gap (>1.5s = slow).
+That is a scoring heuristic, not a detector property, so sessions can move
+between the two rows as the simulator or detectors change; the overall recall
+is the number to compare across runs.
 
 A separate stress run adds 900 deliberately hard benign sessions (frustrated
 users retrying a 403, aggressive API clients, SPA token refresh): **0 false
@@ -152,9 +168,19 @@ collapse. A second bug: the breakthrough write targeted a *child* path
 97–98% **without touching thresholds** — precision and FPR never moved.
 
 This is the honest value of the simulation step: it surfaces detector bugs
-before a customer's traffic does. The remaining ~2% misses are genuine edge
-cases (a lucky single-variant breakthrough; spacing beyond the window), left
-visible rather than papered over by loosening thresholds.
+before a customer's traffic does.
+
+The remaining misses (9 / 800, all labelled block-defiance) were inspected
+one by one. Every one is a **failed grind**: deny, then 5–10 evasion variants
+(encoding, dot-segment, case, method), every attempt answered 401/403/404,
+including the POST attempts — no breakthrough ever happens. By §4.1's
+definition that is correctly not a block-defiance alert: the attack did not
+succeed. They are left visible rather than papered over by loosening
+thresholds. They are not lost, either: exactly this sub-threshold shape is
+what the cross-tenant correlator (§11) ships off-site, so a swarm of failed
+grinds still surfaces across customers. A local, lower-severity "attempted
+defiance" alert is a possible addition, but would need its own FP gate on
+the benign + NAT suites before it ships.
 
 ## 7. Known limits
 
@@ -185,8 +211,9 @@ government on 10 September, and ASD found out on 15 September.
 This is the AI-attack-detection module of a compliance-and-monitoring
 subscription for Australian conveyancers (ARNECC MPR v8 "secure use of
 systems") and GP/allied-health practices (RACGP 6th-edition F8 incident
-response), and a white-label feed for MSPs. The methodology and results are
-also publishable as a research note.
+response), and a white-label feed for MSPs — where the cross-tenant
+correlator (§11) is the reason to buy through an MSP rather than per-site.
+The methodology and results are also publishable as a research note.
 
 ## 10. Hardening round 2 and the honeypot
 
@@ -221,8 +248,52 @@ records. Public collection needs deployment on owned infrastructure
 is a false-positive baseline on real benign traffic — the number a security
 buyer asks for.
 
+## 11. Cross-tenant swarm correlation
+
+The distributed-agent case defeats every single-site detector by design: a
+swarm splits its work so each target sees one or two quiet probes, and each
+site is *right* not to alarm. The campaign is only visible across targets —
+which a solo site can't see and a multi-tenant operator (an MSP) can. This is
+the part of AgentWall no incumbent sells.
+
+**Signals, not data.** Each tenant runs `extract_signals` over its own events
+and emits a signal for every post-deny grind with ≥2 distinct variants —
+deliberately *more* sensitive than local alerting, including grinds that never
+broke through. A signal carries no customer data: a truncated SHA-256 digest
+of (evasion grammar + resource shape), a salted hash of the actor, a
+timestamp, the tenant id, and two booleans (hard evasion present,
+breakthrough reached). Raw paths, query strings, bodies and real IPs never
+leave the tenant. Resource *shape* generalises a path to category + depth
+(`/portal/matters` and `/client-area/files` both become `auth|d2`) so firms
+with different URLs still correlate on structure.
+
+**Two tiers.** The correlator buckets signals over a sliding window (default
+24h) and fires when the same key appears at enough distinct tenants:
+- *grammar + shape* (precise): same TTP on the same endpoint type, ≥3 tenants;
+- *grammar only* (broad): same TTP on any endpoint type, ≥4 tenants by
+  default, the higher bar paying for the broader match.
+
+**Noise control.** Only grammars containing a hard-evasion class are
+correlated, the same rule that fixed the NAT false positive (§10); everyone's
+stray trailing slash never lines up into a false swarm.
+
+**Results** (`cross_tenant_demo.py`): a swarm spread across 5 tenants, each
+below its local threshold — local detectors fire at 0 / 5, the correlator
+raises 2 swarm alerts (one per tier). A negative control of unrelated benign
+noise with different grammars raises 0. The swarm hidden inside that noise
+raises exactly the same 2 alerts, 0 from the noise. This is a constructed
+demo, not a measured rate — real multi-tenant data is needed for an FP figure.
+
+**Status.** The correlator is in-process in the PoC. Production needs a
+transport — tenants POST signals over mutually authenticated TLS — which is an
+open item. The streaming entry point (`ingest`) returns every alert a signal
+raises, since one signal can complete both tiers at once; this is
+regression-gated in `unit_checks.py` (#7).
+
 ---
-*PoC code: `events.py`, `simulator.py`, `detectors.py`, `eval.py`,
-`stress.py`, `stress_nat.py`, `unit_checks.py`, `ingest.py`, `honeypot.py`,
-`honeypot_drive.py`, `analyze.py`. Reproduce with `python3 eval.py`,
-`python3 stress_nat.py`, `python3 honeypot_drive.py`.*
+*PoC code: `events.py`, `simulator.py`, `detectors.py`, `correlation.py`,
+`eval.py`, `stress.py`, `stress_nat.py`, `unit_checks.py`,
+`cross_tenant_demo.py`, `ingest.py`, `honeypot.py`, `honeypot_drive.py`,
+`analyze.py`. Reproduce with `python3 eval.py`, `python3 stress_nat.py`,
+`python3 unit_checks.py`, `python3 cross_tenant_demo.py`,
+`python3 honeypot_drive.py`.*
