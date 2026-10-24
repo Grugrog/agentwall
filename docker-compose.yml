@@ -1,0 +1,34 @@
+# AgentWall honeypot + periodic log analysis.
+#
+#   docker compose up -d
+#
+# Put a TLS-terminating reverse proxy or Cloudflare Tunnel in front of :8899
+# so the honeypot sees a plausible public hostname and the real client IP via
+# X-Forwarded-For. Do NOT expose :8899 raw to the internet without that proxy.
+services:
+  honeypot:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8899:8899"      # bind to loopback; your proxy/tunnel fronts it
+    volumes:
+      - ./data:/var/log/agentwall
+    # --trust-proxy is on by default in the image; keep it since a proxy fronts it.
+
+  # Scores the accumulating log every 10 min and appends a report. Reuses the
+  # same image (all modules are baked in).
+  analyzer:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          python3 analyze.py /var/log/agentwall/honeypot.jsonl \
+            >> /var/log/agentwall/report.txt 2>&1 || true;
+          sleep 600;
+        done
+    volumes:
+      - ./data:/var/log/agentwall
+    depends_on:
+      - honeypot

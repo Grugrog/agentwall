@@ -1,0 +1,34 @@
+# systemd unit for the AgentWall honeypot (no Docker).
+#   sudo cp agentwall-honeypot.service /etc/systemd/system/
+#   sudo mkdir -p /opt/agentwall /var/log/agentwall
+#   sudo cp *.py /opt/agentwall/
+#   sudo useradd -r -s /usr/sbin/nologin agentwall || true
+#   sudo chown -R agentwall /var/log/agentwall
+#   sudo systemctl daemon-reload && sudo systemctl enable --now agentwall-honeypot
+#
+# Works in the Samsung S26 "Linux Terminal" (Debian) too, if it ships systemd;
+# if not, just run honeypot.py under tmux. Termux has no systemd -- use
+# termux-services or a tmux + termux-wake-lock instead.
+[Unit]
+Description=AgentWall honeypot
+After=network.target
+
+[Service]
+Type=simple
+User=agentwall
+WorkingDirectory=/opt/agentwall
+# bind to loopback; a reverse proxy / Cloudflare Tunnel fronts it and sets XFF
+ExecStart=/usr/bin/python3 /opt/agentwall/honeypot.py \
+    --host 127.0.0.1 --port 8899 \
+    --log /var/log/agentwall/honeypot.jsonl --trust-proxy
+Restart=always
+RestartSec=3
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/agentwall
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
