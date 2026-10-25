@@ -90,6 +90,9 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
   and the actor-hash salt question (shared salt needed for cross-tenant actor
   counts, but a /24 hash is brute-forceable by anyone holding it).
 - Enforcement hooks (Cloudflare/Entra/firewall API) — deliberately not built.
-- `docker build` was never run in the origin env (locked egress) — build it.
+- Docker: verified 2026-10-25. Image builds (python:3.12-slim), runs as uid
+  10001, honours XFF with --trust-proxy, logs to the bind mount; a root-owned
+  data dir fails loudly at startup; `docker compose up` runs honeypot + analyzer
+  and report.txt shows detections. (Cloud env: Docker needs `sudo`.)
 - Real-traffic collection: deploy honeypot behind Cloudflare Tunnel / VPS.
 - Business side: MSP pricing, the ACSC-anchored pitch, demand validation.
