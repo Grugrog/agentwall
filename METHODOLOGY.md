@@ -214,12 +214,19 @@ government on 10 September, and ASD found out on 15 September.
 
 ## 9. Fit
 
-This is the AI-attack-detection module of a compliance-and-monitoring
-subscription for Australian conveyancers (ARNECC MPR v8 "secure use of
-systems") and GP/allied-health practices (RACGP 6th-edition F8 incident
-response), and a white-label feed for MSPs — where the cross-tenant
-correlator (§11) is the reason to buy through an MSP rather than per-site.
-The methodology and results are also publishable as a research note.
+This is not a standalone "AI defence" platform. It is a feature-plus-service
+sold through MSPs, anchored to the ACSC's 25 September 2026 High alert: the
+MSP sells its clients the outcome — "you'd know if an agent pushed past your
+blocks or exfiltrated data, and you'd have an ACSC-ready evidence pack the
+same day" — not fear. The channel is structural, not just distribution: the
+cross-tenant correlator (§11) only works across many tenants, which an MSP
+has and a single site doesn't.
+
+The MSPs' clients that fit best are those with an existing obligation the
+evidence pack satisfies: Australian conveyancers (ARNECC MPR v8 "secure use
+of systems") and GP/allied-health practices (RACGP 6th-edition F8 incident
+response). The methodology and results are also publishable as a research
+note.
 
 ## 10. Hardening round 2 and the honeypot
 
