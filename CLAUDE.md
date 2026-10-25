@@ -25,6 +25,7 @@ python3 stress.py          # hard benign traffic, expect 0 FP
 python3 stress_nat.py      # NAT /24 FP gate + actor-scoped cross-session recall
 python3 unit_checks.py     # proves each addition fires + regression gates for fixed bugs
 python3 cross_tenant_demo.py  # the moat: distributed-swarm correlation
+python3 correlator_e2e.py  # correlator over real TLS + HMAC auth, forgery/leak gates
 python3 honeypot_drive.py  # live server + real HTTP + detectors (end-to-end)
 python3 ingest.py LOG      # run detectors on real nginx/Cloudflare/JSONL logs
 python3 analyze.py LOG     # summarise + score any honeypot/access log
@@ -33,7 +34,7 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
 ## Current state (all green; do not regress)
 - eval: recall 98.9% ±1.5%, precision 100%, FPR 0.0%
 - stress: 0 FP / 6300 benign · stress_nat: 6/6 + cross-session 200/200
-- unit_checks: 12/12 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
+- unit_checks: 12/12 · correlator_e2e: 19/19 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
 
 ## Files
 - `events.py` — `Event` / `Detection` data model. **Invariant: detectors must
@@ -43,8 +44,12 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
   LLM-artifact), `egress_deaddrop`, `kill_chain`.
 - `correlation.py` — cross-tenant swarm correlation (the moat), two tiers
   (grammar+shape, grammar-only), privacy-preserving digests only.
+- `correlator_service.py` — correlator transport: HTTPS + per-tenant HMAC,
+  nonce replay guard, server re-derives digest/hard and requires
+  signal.tenant_id == authenticated tenant (no one-key fake swarms), exact
+  field set (no raw data rides along). `serve` / `push` CLI.
 - `simulator.py` — labelled traffic (humans/goodbots/egress + 3 attack vectors).
-- `eval.py` / `stress.py` / `stress_nat.py` / `unit_checks.py` / `cross_tenant_demo.py` — tests.
+- `eval.py` / `stress.py` / `stress_nat.py` / `unit_checks.py` / `cross_tenant_demo.py` / `correlator_e2e.py` — tests.
 - `ingest.py` / `analyze.py` — real-log tooling.
 - `honeypot.py` (+ `honeypot_drive.py`) — live decoy server, XFF-aware.
 - `Dockerfile` / `docker-compose.yml` / `agentwall-honeypot.service` / `DEPLOY.md` — deploy.
@@ -80,7 +85,10 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
   `DEPLOY.md` is the outstanding validation step; don't oversell sim numbers.
 
 ## Open threads (pick up here)
-- Correlator transport/auth: tenants POST signals over TLS; currently in-process.
+- Correlator transport: built (`correlator_service.py`). Still open: mTLS
+  instead of HMAC secrets, persistence of buckets/replay cache across restarts,
+  and the actor-hash salt question (shared salt needed for cross-tenant actor
+  counts, but a /24 hash is brute-forceable by anyone holding it).
 - Enforcement hooks (Cloudflare/Entra/firewall API) — deliberately not built.
 - `docker build` was never run in the origin env (locked egress) — build it.
 - Real-traffic collection: deploy honeypot behind Cloudflare Tunnel / VPS.

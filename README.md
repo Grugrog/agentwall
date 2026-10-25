@@ -28,6 +28,10 @@ REAL logs, and `honeypot.py` is a live server that produces them.
 - `analyze.py` — summarise + score any honeypot/access log.
 - `correlation.py` — **cross-tenant swarm correlation** (the moat).
 - `cross_tenant_demo.py` — proves it catches distributed swarms. `python3 cross_tenant_demo.py`
+- `correlator_service.py` — correlator transport: tenants POST signals over
+  HTTPS with per-tenant HMAC auth (`serve` / `push` subcommands).
+- `correlator_e2e.py` — real TLS server; swarm caught over the wire, every
+  forged/leaky/replayed request refused. `python3 correlator_e2e.py`
 - `Dockerfile`, `docker-compose.yml`, `agentwall-honeypot.service` — deploy.
 - `DEPLOY.md` — run the honeypot publicly for real collection (safely).
 - `METHODOLOGY.md` — the write-up.
@@ -98,7 +102,16 @@ a central correlator. Two tiers: grammar+shape (precise) and grammar-only
 **0/5 local detectors fired** (each probe sub-threshold) is surfaced as a
 swarm alert, while unrelated benign noise across tenants does **not** correlate.
 
+Transport (`correlator_service.py`): HTTPS + per-tenant HMAC, single-use
+nonces, and server-side checks of every field (tenant must match the key,
+digest/hard recomputed, exact field set so no raw data can ride along).
+```
+python3 correlator_service.py serve --keys tenant_keys.json --cert c.pem --key k.pem
+python3 correlator_service.py push --url https://corr:8443 --tenant A --secret-file a.secret access.log
+```
+
 ## Not built yet
 - Enforcement (block via Cloudflare/Entra/firewall API). Detect-and-report by
   design; auto-block creates liability.
-- Correlator transport/auth (tenants POST signals over TLS) — in-process only.
+- Correlator persistence (buckets and replay cache are in memory) and mTLS
+  (auth is a per-tenant HMAC secret today).

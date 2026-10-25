@@ -290,16 +290,38 @@ noise with different grammars raises 0. The swarm hidden inside that noise
 raises exactly the same 2 alerts, 0 from the noise. This is a constructed
 demo, not a measured rate — real multi-tenant data is needed for an FP figure.
 
-**Status.** The correlator is in-process in the PoC. Production needs a
-transport — tenants POST signals over mutually authenticated TLS — which is an
-open item. The streaming entry point (`ingest`) returns every alert a signal
+**Transport** (`correlator_service.py`). Tenants POST signal batches to
+`/v1/signals` over HTTPS. Each request carries an HMAC-SHA256 over tenant,
+timestamp, a single-use nonce and the body, keyed by a per-tenant secret; skew
+over 5 minutes or a reused nonce is refused. The server trusts no field a
+tenant sends. Every signal's `tenant_id` must be the authenticated tenant, so
+one key can't fake a swarm out of made-up tenants. `digest` and `hard` are
+recomputed from (signature, shape), so a tenant can't claim hard evasion or
+aim at another bucket. The field set must match exactly, so an extra field
+such as a raw path is refused rather than silently dropped. Batches are
+all-or-nothing. The reply is only an accepted count, never whether others
+share a digest. The client refuses plain HTTP off loopback, and the server
+refuses to listen off loopback without a certificate. Alerts go to a JSONL file
+for the operator. Gated by `correlator_e2e.py` (19 checks on a real TLS server).
+Each auth and validation gate was checked by removing it and confirming its test
+fails.
+
+Limits of the transport: auth is a shared secret per tenant, not client
+certificates (mTLS); a TLS-terminating proxy can add those. Correlator buckets
+and the replay cache are in memory, so a restart empties them; the timestamp
+skew still bounds replay. `distinct_actors` only counts across tenants if every
+tenant uses the same actor-hash salt, and a hashed /24 can be brute-forced by
+anyone who holds that salt. It hides sources from the correlator operator only
+when the operator never sees the salt.
+
+**Streaming.** The streaming entry point (`ingest`) returns every alert a signal
 raises, since one signal can complete both tiers at once; this is
 regression-gated in `unit_checks.py` (#7).
 
 ---
 *PoC code: `events.py`, `simulator.py`, `detectors.py`, `correlation.py`,
 `eval.py`, `stress.py`, `stress_nat.py`, `unit_checks.py`,
-`cross_tenant_demo.py`, `ingest.py`, `honeypot.py`, `honeypot_drive.py`,
+`cross_tenant_demo.py`, `correlator_service.py`, `correlator_e2e.py`, `ingest.py`, `honeypot.py`, `honeypot_drive.py`,
 `analyze.py`. Reproduce with `python3 eval.py`, `python3 stress_nat.py`,
-`python3 unit_checks.py`, `python3 cross_tenant_demo.py`,
+`python3 unit_checks.py`, `python3 cross_tenant_demo.py`, `python3 correlator_e2e.py`,
 `python3 honeypot_drive.py`.*
