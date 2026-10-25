@@ -114,5 +114,27 @@ from detectors import _resource_key
 ks={_resource_key(p) for p in ['/portal','/portal;','/portal..;/','/;/portal','/portal%20','/portal%252f']}
 check("all variants -> one key", ks=={'portal'}, f"got {ks}")
 
+print("#11 honeypot logs stdlib-rejected requests (414 used to crash the handler):")
+import json, os, socket, tempfile
+from honeypot import Honeypot
+_log = os.path.join(tempfile.mkdtemp(), "hp.jsonl")
+hp = Honeypot(host="127.0.0.1", port=0, log_path=_log); hp.start_background()
+def _raw(data):
+    s = socket.create_connection(("127.0.0.1", hp.port), timeout=3)
+    s.sendall(data); s.shutdown(socket.SHUT_WR)
+    while s.recv(4096): pass
+    s.close()
+_raw(b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n")                  # fresh conn
+_raw(b"GET /about HTTP/1.1\r\nUser-Agent: PRIOR-UA\r\n\r\n"
+     b"GET /" + b"b" * 70000 + b" HTTP/1.1\r\n\r\n")                   # keep-alive
+_raw(b"HEAD /nope HTTP/1.1\r\n\r\n")
+hp.stop()
+recs = [json.loads(l) for l in open(_log)]
+r414 = [r for r in recs if r["status"] == 414]
+check("414 on fresh + keep-alive conn both logged", len(r414) == 2, f"got {len(r414)}")
+check("keep-alive 414 doesn't inherit prior UA",
+      all(r["user_agent"] == "" for r in r414) and all(r["path"].startswith("GET /") for r in r414))
+check("HEAD logs 0 bytes sent", [r["bytes_out"] for r in recs if r["method"] == "HEAD"] == [0])
+
 print(f"\n{len(PASS)} pass, {len(FAIL)} fail")
 if FAIL: print("FAILED:", FAIL)

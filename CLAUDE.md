@@ -34,7 +34,7 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
 ## Current state (all green; do not regress)
 - eval: recall 98.9% ±1.5%, precision 100%, FPR 0.0%
 - stress: 0 FP / 6300 benign · stress_nat: 6/6 + cross-session 200/200
-- unit_checks: 12/12 · correlator_e2e: 19/19 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
+- unit_checks: 15/15 · correlator_e2e: 19/19 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
 
 ## Files
 - `events.py` — `Event` / `Detection` data model. **Invariant: detectors must
@@ -75,6 +75,11 @@ python3 analyze.py LOG     # summarise + score any honeypot/access log
 7. An earlier canary callback swallowed a later denial-page PROOF in the same
    session (unit #8). Cloudflare ingest used per-request RayID as the session;
    honeypot used ip:port; both blinded the per-session scope. Fixed.
+8. Honeypot error paths fingerprinted it as Python http.server and never
+   logged OPTIONS/PROPFIND/malformed probes. Now nginx-style and logged via
+   `send_error`. A 414 (oversized request line) fires before `parse_request`,
+   so it crashed on a fresh conn and logged the prior request's UA on
+   keep-alive; headers/path are reset for it (unit #11).
 
 ## Invariants / design rules
 - Detect-and-report only. **No enforcement, no hacking back** (Criminal Code

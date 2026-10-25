@@ -36,6 +36,7 @@ import json
 import secrets
 import threading
 import time
+from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PUBLIC_PATHS = {"/", "/about", "/services", "/contact", "/fees", "/team",
@@ -60,6 +61,20 @@ _CANARY_BODY = (
 _ROBOTS = "User-agent: *\nDisallow: /docs/internal-process.html\nDisallow: /datasets/\n"
 _LLMS = ("# llms.txt\n> Decoy directives for automated agents.\n"
          "Disallow: /datasets/client-index.json\n")
+
+# nginx's own reason phrases and error page. Python's stock "Error response"
+# page and phrases like "Unsupported method ('OPTIONS')" fingerprint the
+# honeypot as http.server to any scanner, so errors must look like nginx too.
+_NGINX_REASON = {400: "Bad Request", 403: "Forbidden", 404: "Not Found",
+                 405: "Not Allowed", 408: "Request Time-out",
+                 413: "Request Entity Too Large", 414: "Request-URI Too Large",
+                 431: "Bad Request", 500: "Internal Server Error"}
+
+
+def _nginx_page(code: int, reason: str) -> bytes:
+    return (f"<html>\r\n<head><title>{code} {reason}</title></head>\r\n<body>\r\n"
+            f"<center><h1>{code} {reason}</h1></center>\r\n"
+            f"<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n").encode()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -91,8 +106,8 @@ class _Handler(BaseHTTPRequestHandler):
             "session_id": self._session_id(),
             "src_ip": self._client_ip(),
             "user_agent": self.headers.get("User-Agent", ""),
-            "method": self.command,
-            "path": self.path,
+            "method": self.command or "-",
+            "path": self.path or self.requestline[:256],
             "status": status,
             "bytes_out": nbytes,
             "denial_nonce": denial_nonce,
@@ -139,6 +154,44 @@ class _Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a):           # silence default stderr logging
         pass
+
+    def version_string(self) -> str:     # stdlib appends " " + sys_version
+        return self.server_version
+
+    def parse_request(self):
+        # a malformed request line fails before headers/path are parsed; reset
+        # them so send_error never logs the previous keep-alive request's
+        self.headers, self.path = HTTPMessage(), ""
+        return super().parse_request()
+
+    def send_error(self, code, message=None, explain=None):
+        # Everything the stdlib rejects (bad request line, oversized headers,
+        # an unsupported method) lands here. Answer as nginx would, and LOG
+        # it: OPTIONS/PROPFIND probes and malformed requests are scanner
+        # signal that previously never reached the log.
+        if code == 501:                  # nginx: unsupported method -> 405
+            code = 405
+        if code == 414:
+            # sent before parse_request runs, so headers/path are unset (fresh
+            # connection) or the previous keep-alive request's; log the raw line
+            self.headers = HTTPMessage()
+            self.path = self.raw_requestline[:256].decode("latin-1").rstrip("\r\n")
+        reason = _NGINX_REASON.get(code) or self.responses.get(code, ("Error",))[0]
+        body = _nginx_page(code, reason)
+        self.close_connection = True
+        self.send_response(code, reason)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        sent = 0
+        if self.command != "HEAD":
+            try:
+                self.wfile.write(body)
+                sent = len(body)
+            except Exception:
+                pass
+        self._emit(code, sent)
 
     # -- routing ------------------------------------------------------------
     def _route(self):
@@ -191,7 +244,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._respond(200, b"<html><body>ok</body></html>",
                           body_sample=body_sample)
             return
-        self._respond(404, b"not found", body_sample=body_sample)
+        self._respond(404, _nginx_page(404, "Not Found"), body_sample=body_sample)
 
     def _respond(self, status: int, body: bytes, denial_nonce: str = "",
                  body_sample: str = ""):
@@ -201,12 +254,14 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._cookie_sid():
             self.send_header("Set-Cookie", f"sid={self._session_id()}; Path=/")
         self.end_headers()
+        sent = 0
         if self.command != "HEAD":           # HEAD: headers only, never a body
             try:
                 self.wfile.write(body)
+                sent = len(body)
             except Exception:
                 pass
-        self._emit(status, len(body), denial_nonce, body_sample)
+        self._emit(status, sent, denial_nonce, body_sample)
 
     do_GET = _route
     do_POST = _route
