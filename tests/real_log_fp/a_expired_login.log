@@ -1,0 +1,5 @@
+203.0.113.10 - - [06/Nov/2026:09:00:00 +1000] "GET /api/v1/matters HTTP/1.1" 401 52 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+203.0.113.10 - - [06/Nov/2026:09:00:04 +1000] "POST /auth/refresh HTTP/1.1" 200 310 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+203.0.113.10 - - [06/Nov/2026:09:00:05 +1000] "GET /api/v1/matters HTTP/1.1" 200 4120 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+203.0.113.10 - - [06/Nov/2026:09:00:06 +1000] "GET /api/v1/matters/101 HTTP/1.1" 200 900 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+203.0.113.10 - - [06/Nov/2026:09:00:09 +1000] "GET /api/v1/matters/102 HTTP/1.1" 200 870 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"

@@ -2,9 +2,8 @@
 
 You are continuing **AgentWall**, a web/HTTP-layer detect-and-report system for
 rogue AI-agent attacks, built with Grug (independent security researcher, SEQ
-QLD, sole trader). This file bootstraps a fresh session — the prior work
-happened in another conversation whose transcript you do NOT have. Trust the
-code and the docs here over any assumption.
+QLD, sole trader). This file bootstraps a fresh session — trust the code and
+docs here over any assumption.
 
 ## What it is
 Detects the behaviour from the two 2026 incidents:
@@ -15,61 +14,54 @@ Detects the behaviour from the two 2026 incidents:
 
 Positioning (decided): NOT a standalone "AI defence" platform — a feature-plus-
 service sold through MSPs, anchored to the ACSC 25 Sep 2026 High alert. Sell the
-outcome + ACSC-ready evidence pack, never fear. Read `METHODOLOGY.md` and
-`README.md` for the full write-up and the competitive landscape rationale.
+outcome + ACSC-ready evidence pack, never fear. See `METHODOLOGY.md`,
+`COMPETITIVE_LANDSCAPE.md`, `ROADMAP.md`.
 
-## Run / test (everything is Python 3 stdlib, no deps)
+## Run / test (Python 3 stdlib, no deps) — all currently PASS
 ```
-python3 eval.py            # 10-seed session-level eval (headline numbers)
-python3 stress.py          # hard benign traffic, expect 0 FP
-python3 stress_nat.py      # NAT /24 FP gate + actor-scoped cross-session recall
-python3 unit_checks.py     # proves each of the 6 additions fires
-python3 cross_tenant_demo.py  # the moat: distributed-swarm correlation
-python3 honeypot_drive.py  # live server + real HTTP + detectors (end-to-end)
+python3 eval.py            # 98.2% recall / 100% precision / 0 FP (10 seeds)
+python3 stress.py          # 0 FP across 6300 hard-benign sessions
+python3 stress_nat.py      # NAT /24 FP gate 3/3 + cross-session recall 200/200
+python3 unit_checks.py     # each of the 6 additions fires: 8/8
+python3 cross_tenant_demo.py   # distributed-swarm correlation (the moat)
+python3 honeypot_drive.py  # live server + real HTTP + detectors (54 → 5)
 python3 ingest.py LOG      # run detectors on real nginx/Cloudflare/JSONL logs
-python3 analyze.py LOG     # summarise + score any honeypot/access log
+python3 ingest.py tests/real_log_fp/<case>.log   # real-log FP regression
 ```
-
-## Current state (all green; do not regress)
-- eval: recall 98.9% ±1.5%, precision 100%, FPR 0.0%
-- stress: 0 FP / 6300 benign · stress_nat: 3/3 + cross-session 200/200
-- unit_checks: 8/8 · honeypot e2e: 54 real requests → 5 detections, 0 benign FP
 
 ## Files
-- `events.py` — `Event` / `Detection` data model. **Invariant: detectors must
-  NEVER read `Event.truth`** (ground truth is for the eval harness only).
-- `detectors.py` — 4 detectors: `block_defiance` (fast per-session + slow
-  per-actor/24 scope), `injection_tripwire` (canary + denial-page nonce proof +
-  LLM-artifact), `egress_deaddrop`, `kill_chain`.
-- `correlation.py` — cross-tenant swarm correlation (the moat), two tiers
-  (grammar+shape, grammar-only), privacy-preserving digests only.
-- `simulator.py` — labelled traffic (humans/goodbots/egress + 3 attack vectors).
-- `eval.py` / `stress.py` / `stress_nat.py` / `unit_checks.py` / `cross_tenant_demo.py` — tests.
-- `ingest.py` / `analyze.py` — real-log tooling.
+- `events.py` — `Event`/`Detection` model. **Invariant: detectors NEVER read `Event.truth`.**
+- `detectors.py` — 4 detectors: `block_defiance` (fast per-session + slow per-actor/24),
+  `injection_tripwire` (canary + denial-page nonce proof + LLM-artifact),
+  `egress_deaddrop`, `kill_chain`.
+- `correlation.py` — cross-tenant swarm correlation (the moat), two tiers.
+- `simulator.py` — labelled traffic. `eval.py`/`stress.py`/`stress_nat.py`/
+  `unit_checks.py`/`cross_tenant_demo.py` — tests. `ingest.py`/`analyze.py` — real-log tooling.
 - `honeypot.py` (+ `honeypot_drive.py`) — live decoy server, XFF-aware.
-- `Dockerfile` / `docker-compose.yml` / `agentwall-honeypot.service` / `DEPLOY.md` — deploy.
+- `Dockerfile`/`docker-compose.yml`/`agentwall-honeypot.service`/`DEPLOY.md` — deploy.
+- `patches/` — `agentwall-fp-fix.patch` and `events-fields-fix.patch` are **already
+  applied** in this tree; kept for the record.
+- `tests/real_log_fp/` — real nginx-format FP regression (a,b → 0 ; c,d → 1).
 
 ## Hardening log (bugs the testing caught — don't reintroduce)
-1. Normaliser fragmented evasion variants across resource keys → 18.5% recall.
-   Fixed: `_resource_key` collapses case/encoding/dot-seg/trailing/version.
-2. Breakthrough write to a CHILD path didn't match the denied parent. Fixed:
-   parent/child matching in `_find_armed`.
-3. **NAT /24 false positive**: slow (actor) scope stitched many humans behind
-   one office IP + 1 legit login into a fake block-defiance. Fixed: slow scope
-   requires real evasion grammar (≥N distinct variants AND a HARD_EVASION
-   class), never attempt volume. Gated by `stress_nat.py` — keep it passing.
+1. Normaliser fragmented evasion variants across resource keys → 18.5% recall. Fixed.
+2. Breakthrough write to a CHILD path didn't match the denied parent. Fixed.
+3. **NAT /24 FP**: slow scope stitched many humans behind one IP + 1 legit login into
+   a fake alert. Fixed: slow scope requires real evasion grammar, not volume. Gated by `stress_nat.py`.
+4. **events.py drift**: an older `events.py` lacked `denial_nonce` / `actor_type` /
+   `signature` / `confidence`, crashing every run. Fixed (`patches/events-fields-fix.patch`).
+5. **Legit re-auth misread**: a same-path 2xx after a deny (token refresh) was read as a
+   breakthrough. Fixed (`patches/agentwall-fp-fix.patch`); `tests/real_log_fp/` guards it.
 
 ## Invariants / design rules
-- Detect-and-report only. **No enforcement, no hacking back** (Criminal Code
-  Part 10.7). Honeypot is passive; decoys are inert and labelled TEST-ONLY.
-- Keep precision at 100% / FPR 0 on the benign + NAT suites. If a new detector
-  trades FP for recall, gate it behind a test and say so.
-- Metrics are simulation + a loopback end-to-end run. Real public traffic via
-  `DEPLOY.md` is the outstanding validation step; don't oversell sim numbers.
+- Detect-and-report only. **No enforcement, no hacking back** (Criminal Code Part 10.7).
+  Honeypot is passive; decoys inert and labelled TEST-ONLY.
+- Keep precision 100% / FPR 0 on the benign + NAT + real-log suites. Gate any new detector.
+- Metrics are simulation + a loopback end-to-end run. Real public traffic (see `DEPLOY.md`)
+  is the outstanding validation step; don't oversell sim numbers.
 
-## Open threads (pick up here)
-- Correlator transport/auth: tenants POST signals over TLS; currently in-process.
+## Open threads
+- Correlator transport/auth (tenants POST signals over TLS) — in-process only.
 - Enforcement hooks (Cloudflare/Entra/firewall API) — deliberately not built.
-- `docker build` was never run in the origin env (locked egress) — build it.
 - Real-traffic collection: deploy honeypot behind Cloudflare Tunnel / VPS.
-- Business side: MSP pricing, the ACSC-anchored pitch, demand validation.
+- Business: MSP pricing, the ACSC-anchored pitch, demand validation.

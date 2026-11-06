@@ -48,15 +48,11 @@ class Event:
     direction: str = "inbound"
     dest_host: str = ""            # set for egress events
 
-    # denial-page tripwire: when the server returns a 401/403/429 it stamps a
-    # one-time nonce into the response body ("agents: use GET /cb/<nonce>").
-    # On the DENY event this holds the issued nonce; a later /cb/<nonce> hit
-    # that matches proves an agent read+obeyed the denial body.
-    denial_nonce: str = ""
-
     # optional signals a real edge can cheaply capture
     body_sample: str = ""          # first N bytes of request body, sampled
     header_blob: str = ""          # concatenated non-standard headers
+    denial_nonce: str = ""         # one-time nonce stamped into a 401/403 body
+                                   # (the denial-page tripwire); empty otherwise
     has_referer: bool = True
     web_bot_auth: bool = False     # presented a valid Web Bot Auth signature
 
@@ -87,10 +83,10 @@ class Detection:
     session_id: str
     src_ip: str
     reason: str                    # human-readable why
-    severity: str = "high"         # low | medium | high
+    severity: str = "high"         # low | medium | high | critical
     # the event indices (into the stream) that make up the evidence
     evidence_idx: list = field(default_factory=list)
-    # optional enrichment fields set by specific detectors
-    actor_type: str = ""           # script | agent | human-like | "" (timing)
-    signature: str = ""            # evasion-grammar signature (ordered classes)
-    confidence: str = ""           # behavioural | proof (denial-page callback)
+    # enrichment set by BlockDefianceDetector (empty on other detectors)
+    actor_type: str = ""           # timing-inferred: script | agent | human-like
+    signature: str = ""            # evasion-grammar signature, e.g. "encoding,dotseg"
+    confidence: str = ""           # e.g. "proof" for a denial-page tripwire hit

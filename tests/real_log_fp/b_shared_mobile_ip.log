@@ -1,0 +1,4 @@
+198.51.100.7 - - [06/Nov/2026:10:00:00 +1000] "GET /portal/admin HTTP/1.1" 403 120 "-" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+198.51.100.7 - - [06/Nov/2026:10:00:20 +1000] "GET /portal/admin/files HTTP/1.1" 200 5000 "https://firm.example/" "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0) Safari/604.1"
+198.51.100.7 - - [06/Nov/2026:10:00:41 +1000] "GET /portal/admin/settings HTTP/1.1" 200 3000 "https://firm.example/" "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0"
+198.51.100.7 - - [06/Nov/2026:10:01:02 +1000] "GET /portal/admin/reports HTTP/1.1" 200 4100 "https://firm.example/" "Mozilla/5.0 (Macintosh) Safari/605.1"

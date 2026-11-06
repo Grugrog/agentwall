@@ -1,0 +1,23 @@
+--- a/events.py
++++ b/events.py
+@@ -51,6 +51,8 @@
+     # optional signals a real edge can cheaply capture
+     body_sample: str = ""          # first N bytes of request body, sampled
+     header_blob: str = ""          # concatenated non-standard headers
++    denial_nonce: str = ""         # one-time nonce stamped into a 401/403 body
++                                   # (the denial-page tripwire); empty otherwise
+     has_referer: bool = True
+     web_bot_auth: bool = False     # presented a valid Web Bot Auth signature
+ 
+@@ -81,6 +83,10 @@
+     session_id: str
+     src_ip: str
+     reason: str                    # human-readable why
+-    severity: str = "high"         # low | medium | high
++    severity: str = "high"         # low | medium | high | critical
+     # the event indices (into the stream) that make up the evidence
+     evidence_idx: list = field(default_factory=list)
++    # enrichment set by BlockDefianceDetector (empty on other detectors)
++    actor_type: str = ""           # timing-inferred: script | agent | human-like
++    signature: str = ""            # evasion-grammar signature, e.g. "encoding,dotseg"
++    confidence: str = ""           # e.g. "proof" for a denial-page tripwire hit

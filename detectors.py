@@ -291,6 +291,13 @@ class BlockDefianceDetector:
         if cls not in ("same",):
             st["grammar"].append(cls)
         is_write = e.method in ("PUT", "POST", "DELETE", "PATCH")
+        # Legit re-auth: a 2xx on the EXACT path+method that was denied, with no
+        # hard evasion seen, means access was granted normally (token refresh,
+        # login). Disarm instead of treating later child requests as a grind.
+        if (e.ok and e.path == st["orig_path"] and e.method == st["orig_method"]
+                and not (set(st["grammar"]) & HARD_EVASION)):
+            self._state[scope].pop(k, None)
+            return None, None
         breakthrough = e.ok or is_write
         if breakthrough and self._enough(scope, st):
             return k[1], st

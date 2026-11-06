@@ -50,14 +50,14 @@ REAL logs, and `honeypot.py` is a live server that produces them.
 ## Results (10 seeds, hardened)
 | metric | value |
 |---|---|
-| recall | 98.9% ± 1.5% |
+| recall | 98.2% ± 2.0% |
 | precision | 100% |
 | false-positive rate | 0.0% (0 / 5400 benign; 0 / 6300 incl. hard cases; 0 on NAT /24 cases) |
-| block-defiance recall | 96.5% |
+| block-defiance recall | 97.5% |
 | injection recall | 100% |
-| low-and-slow recall | 100% |
+| low-and-slow recall | 96.0% |
 | cross-session recall (actor-scoped) | 100% (200 campaigns) |
-| mean time-to-detect | ~3.3s |
+| mean time-to-detect | ~4.4s |
 
 Plus a **live end-to-end run** (`honeypot_drive.py`): 54 real HTTP requests →
 5 detections (2 canary callbacks, 1 denial-page proof, 1 block_defiance, 1
@@ -72,6 +72,11 @@ kill_chain), 0 false positives on the benign clients.
   behind one office IP + 1 legit login into a fake block-defiance alert. Fixed:
   slow scope now requires real evasion grammar, not attempt volume. Regression-
   gated in `stress_nat.py`.
+
+- **Legit re-auth misread** (applied `patches/agentwall-fp-fix.patch`): a 2xx on
+  the exact denied path+method with no hard evasion (token refresh / login) now
+  disarms instead of counting as a breakthrough; `ingest.py` also keys sessions on
+  IP+UA (Cloudflare RayID is per-request). Regression: `tests/real_log_fp/`.
 
 ## Known limits (honest)
 - Spacing beyond the slow-scope TTL is still missed; the TTL trades coverage

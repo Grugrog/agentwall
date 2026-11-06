@@ -1,0 +1,4 @@
+192.0.2.60 - - [06/Nov/2026:12:00:00 +1000] "GET /portal/reports HTTP/1.1" 403 120 "-" "python-httpx/0.27"
+192.0.2.60 - - [06/Nov/2026:12:00:08 +1000] "GET /portal/reports/export HTTP/1.1" 403 120 "-" "python-httpx/0.27"
+192.0.2.60 - - [06/Nov/2026:12:00:15 +1000] "GET /portal/reports/statistics HTTP/1.1" 403 120 "-" "python-httpx/0.27"
+192.0.2.60 - - [06/Nov/2026:12:00:24 +1000] "GET /portal/reports/download HTTP/1.1" 200 64000 "-" "python-httpx/0.27"

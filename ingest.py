@@ -59,7 +59,7 @@ def parse_nginx(line: str, body_field: Optional[str] = None) -> Optional[Event]:
     g = m.groupdict()
     return Event(
         ts=_to_epoch(g["ts"], _NGINX_TS),
-        session_id=g["ip"],                 # no session id in access logs -> IP
+        session_id=g["ip"] + "|" + g["ua"],  # no session id: IP+UA pseudo-session
         src_ip=g["ip"], user_agent=g["ua"],
         method=g["method"], path=g["path"],
         status=int(g["status"]),
@@ -89,7 +89,8 @@ def parse_cloudflare(line: str, body_field: Optional[str] = None) -> Optional[Ev
         body = str(o[body_field])[:512]
     return Event(
         ts=float(ts),
-        session_id=o.get("RayID") or o.get("ClientIP", "?"),
+        # RayID is unique PER REQUEST, so it can't be a session key.
+        session_id=str(o.get("ClientIP", "?")) + "|" + str(o.get("ClientRequestUserAgent", "")),
         src_ip=o.get("ClientIP", "?"),
         user_agent=o.get("ClientRequestUserAgent", ""),
         method=o.get("ClientRequestMethod", "GET"),

@@ -1,0 +1,97 @@
+diff --git a/detectors.py b/detectors.py
+index bb1738c..c303f4f 100644
+--- a/detectors.py
++++ b/detectors.py
+@@ -291,6 +291,13 @@ class BlockDefianceDetector:
+         if cls not in ("same",):
+             st["grammar"].append(cls)
+         is_write = e.method in ("PUT", "POST", "DELETE", "PATCH")
++        # Legit re-auth: a 2xx on the EXACT path+method that was denied, with no
++        # hard evasion seen, means access was granted normally (token refresh,
++        # login). Disarm instead of treating later child requests as a grind.
++        if (e.ok and e.path == st["orig_path"] and e.method == st["orig_method"]
++                and not (set(st["grammar"]) & HARD_EVASION)):
++            self._state[scope].pop(k, None)
++            return None, None
+         breakthrough = e.ok or is_write
+         if breakthrough and self._enough(scope, st):
+             return k[1], st
+diff --git a/ingest.py b/ingest.py
+index cfbaa3e..75eb811 100644
+--- a/ingest.py
++++ b/ingest.py
+@@ -59,7 +59,7 @@ def parse_nginx(line: str, body_field: Optional[str] = None) -> Optional[Event]:
+     g = m.groupdict()
+     return Event(
+         ts=_to_epoch(g["ts"], _NGINX_TS),
+-        session_id=g["ip"],                 # no session id in access logs -> IP
++        session_id=g["ip"] + "|" + g["ua"],  # no session id: IP+UA pseudo-session
+         src_ip=g["ip"], user_agent=g["ua"],
+         method=g["method"], path=g["path"],
+         status=int(g["status"]),
+@@ -89,7 +89,8 @@ def parse_cloudflare(line: str, body_field: Optional[str] = None) -> Optional[Ev
+         body = str(o[body_field])[:512]
+     return Event(
+         ts=float(ts),
+-        session_id=o.get("RayID") or o.get("ClientIP", "?"),
++        # RayID is unique PER REQUEST, so it can't be a session key.
++        session_id=str(o.get("ClientIP", "?")) + "|" + str(o.get("ClientRequestUserAgent", "")),
+         src_ip=o.get("ClientIP", "?"),
+         user_agent=o.get("ClientRequestUserAgent", ""),
+         method=o.get("ClientRequestMethod", "GET"),
+diff --git a/tests/real_log_fp/README.md b/tests/real_log_fp/README.md
+new file mode 100644
+index 0000000..2d12a48
+--- /dev/null
++++ b/tests/real_log_fp/README.md
+@@ -0,0 +1,9 @@
++Real-log false-positive regression cases (nginx combined format).
++
++Expected with the fix applied:
++- a_expired_login.log      -> 0 detections (token expired, user logged back in)
++- b_shared_mobile_ip.log   -> 0 detections (one denied user + 3 staff on one shared IP)
++- c_real_attack.log        -> 1 block_defiance (case/encoding/dot-segment bypass)
++- d_route_only_attack.log  -> 1 block_defiance (Medicare-style sibling-route hunt)
++
++Run: python3 ingest.py tests/real_log_fp/<file>.log
+diff --git a/tests/real_log_fp/a_expired_login.log b/tests/real_log_fp/a_expired_login.log
+new file mode 100644
+index 0000000..f7b7c2e
+--- /dev/null
++++ b/tests/real_log_fp/a_expired_login.log
+@@ -0,0 +1,5 @@
++203.0.113.10 - - [06/Nov/2026:09:00:00 +1000] "GET /api/v1/matters HTTP/1.1" 401 52 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
++203.0.113.10 - - [06/Nov/2026:09:00:04 +1000] "POST /auth/refresh HTTP/1.1" 200 310 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
++203.0.113.10 - - [06/Nov/2026:09:00:05 +1000] "GET /api/v1/matters HTTP/1.1" 200 4120 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
++203.0.113.10 - - [06/Nov/2026:09:00:06 +1000] "GET /api/v1/matters/101 HTTP/1.1" 200 900 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
++203.0.113.10 - - [06/Nov/2026:09:00:09 +1000] "GET /api/v1/matters/102 HTTP/1.1" 200 870 "https://firm.example/" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+diff --git a/tests/real_log_fp/b_shared_mobile_ip.log b/tests/real_log_fp/b_shared_mobile_ip.log
+new file mode 100644
+index 0000000..63c1a42
+--- /dev/null
++++ b/tests/real_log_fp/b_shared_mobile_ip.log
+@@ -0,0 +1,4 @@
++198.51.100.7 - - [06/Nov/2026:10:00:00 +1000] "GET /portal/admin HTTP/1.1" 403 120 "-" "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
++198.51.100.7 - - [06/Nov/2026:10:00:20 +1000] "GET /portal/admin/files HTTP/1.1" 200 5000 "https://firm.example/" "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0) Safari/604.1"
++198.51.100.7 - - [06/Nov/2026:10:00:41 +1000] "GET /portal/admin/settings HTTP/1.1" 200 3000 "https://firm.example/" "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0"
++198.51.100.7 - - [06/Nov/2026:10:01:02 +1000] "GET /portal/admin/reports HTTP/1.1" 200 4100 "https://firm.example/" "Mozilla/5.0 (Macintosh) Safari/605.1"
+diff --git a/tests/real_log_fp/c_real_attack.log b/tests/real_log_fp/c_real_attack.log
+new file mode 100644
+index 0000000..cd69f91
+--- /dev/null
++++ b/tests/real_log_fp/c_real_attack.log
+@@ -0,0 +1,4 @@
++192.0.2.50 - - [06/Nov/2026:11:00:00 +1000] "GET /portal/reports HTTP/1.1" 403 120 "-" "python-httpx/0.27"
++192.0.2.50 - - [06/Nov/2026:11:00:06 +1000] "GET /PORTAL/reports HTTP/1.1" 403 120 "-" "python-httpx/0.27"
++192.0.2.50 - - [06/Nov/2026:11:00:13 +1000] "GET /portal/reports%2e HTTP/1.1" 403 120 "-" "python-httpx/0.27"
++192.0.2.50 - - [06/Nov/2026:11:00:21 +1000] "GET /portal/./reports HTTP/1.1" 200 88000 "-" "python-httpx/0.27"
+diff --git a/tests/real_log_fp/d_route_only_attack.log b/tests/real_log_fp/d_route_only_attack.log
+new file mode 100644
+index 0000000..3f213a8
+--- /dev/null
++++ b/tests/real_log_fp/d_route_only_attack.log
+@@ -0,0 +1,4 @@
++192.0.2.60 - - [06/Nov/2026:12:00:00 +1000] "GET /portal/reports HTTP/1.1" 403 120 "-" "python-httpx/0.27"
++192.0.2.60 - - [06/Nov/2026:12:00:08 +1000] "GET /portal/reports/export HTTP/1.1" 403 120 "-" "python-httpx/0.27"
++192.0.2.60 - - [06/Nov/2026:12:00:15 +1000] "GET /portal/reports/statistics HTTP/1.1" 403 120 "-" "python-httpx/0.27"
++192.0.2.60 - - [06/Nov/2026:12:00:24 +1000] "GET /portal/reports/download HTTP/1.1" 200 64000 "-" "python-httpx/0.27"

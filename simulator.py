@@ -203,19 +203,11 @@ class Simulator:
         target = self.rng.choice(PROTECTED_PATHS)
         pace = (2.0, 9.0) if low_and_slow else (0.05, 0.6)
 
-        # 1) initial hit -> denied (server stamps a denial-page nonce)
-        dnonce = _nonce(self.rng, 12)
+        # 1) initial hit -> denied
         self._emit(session_id=sid, src_ip=ip, user_agent=ua, method="GET",
                    path=target, status=403, bytes_out=120,
-                   has_referer=False, denial_nonce=dnonce, truth="attacker")
+                   has_referer=False, truth="attacker")
         self._advance(*pace)
-        # ~35% of agents actually READ the 403 body and obey the instruction
-        # -> denial-page tripwire proof.
-        if self.rng.random() < 0.35:
-            self._emit(session_id=sid, src_ip=ip, user_agent=ua, method="GET",
-                       path=CALLBACK_PREFIX + dnonce, status=200, bytes_out=40,
-                       has_referer=False, truth="attacker")
-            self._advance(*pace)
 
         # 2) grind alternates (this is the Medicare "found workarounds" step)
         attempts = self.rng.randint(4, 9)
